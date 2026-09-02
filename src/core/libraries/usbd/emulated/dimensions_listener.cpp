@@ -47,8 +47,12 @@ constexpr u8 kGetLedCommand = 0x04;
 
 constexpr size_t kHeaderSize = 5;
 constexpr size_t kFigureDataSize = DIMENSIONS_FIGURE_SIZE;
-// { 'L', serial, 3, then 3 regions x 9 bytes }.
-constexpr size_t kLedResponseSize = 3 + 3 * 9;
+// Protocol version 2 (matches the Cemu/RPCS3 listeners): adds from_r/g/b, the
+// pre-fade colour, so a client can render the real toypad's two-colour
+// cross-fade instead of a single-hue brightness ramp.
+constexpr u8 kLedProtocolVersion = 2;
+// { 'L', serial, version, region count, then 3 regions x 12 bytes }.
+constexpr size_t kLedResponseSize = 4 + 3 * 12;
 
 // A figure landing on a slot that still holds one has to be announced as two
 // separate events, and the game needs to see the removal before the arrival.
@@ -264,18 +268,22 @@ void DimensionsListener::HandleClient(u64 client_handle) {
             std::array<u8, kLedResponseSize> response{};
             response[0] = 0x4C; // 'L' magic
             response[1] = m_toypad->GetLedSerial();
-            response[2] = 0x03; // region count
+            response[2] = kLedProtocolVersion;
+            response[3] = 0x03; // region count
             for (size_t i = 0; i < states.size(); ++i) {
-                const size_t offset = 3 + i * 9;
+                const size_t offset = 4 + i * 12;
                 response[offset + 0] = states[i].pad;
                 response[offset + 1] = states[i].mode;
                 response[offset + 2] = states[i].r;
                 response[offset + 3] = states[i].g;
                 response[offset + 4] = states[i].b;
-                response[offset + 5] = states[i].on_ms;
-                response[offset + 6] = states[i].off_ms;
-                response[offset + 7] = states[i].count;
-                response[offset + 8] = states[i].speed_ms;
+                response[offset + 5] = states[i].from_r;
+                response[offset + 6] = states[i].from_g;
+                response[offset + 7] = states[i].from_b;
+                response[offset + 8] = states[i].on_ms;
+                response[offset + 9] = states[i].off_ms;
+                response[offset + 10] = states[i].count;
+                response[offset + 11] = states[i].speed_ms;
             }
             if (!SendAll(client, response.data(), response.size())) {
                 return;

@@ -54,10 +54,16 @@ public:
     // Per-region LED state the game is driving, so a companion app can render
     // the pads glowing like the real toypad. mode: 0 off, 1 solid, 2 flash,
     // 3 fade; pad: 1 = center, 2 = left, 3 = right. Durations are toypad ticks.
+    // from_r/g/b is the colour the pad was already showing when a fade command
+    // was issued: the real toypad fades by alternating between that colour and
+    // the new r/g/b target, not by ramping one colour's brightness. Kept
+    // alongside r/g/b so a renderer can reproduce the actual two-colour
+    // cross-fade (matches the Cemu/RPCS3 listeners' protocol version 2).
     struct led_state {
         u8 pad = 0;
         u8 mode = 0;
         u8 r = 0, g = 0, b = 0;
+        u8 from_r = 0, from_g = 0, from_b = 0;
         u8 on_ms = 0, off_ms = 0, count = 0, speed_ms = 0;
     };
 
@@ -81,7 +87,10 @@ protected:
 private:
     void SetLedState(u8 pad, u8 mode, u8 r, u8 g, u8 b, u8 on_ms, u8 off_ms, u8 count,
                      u8 speed_ms);
-    led_state GetLedState(u8 pad);
+    // Pushes ";LED_STATE <serial> <36 ints>" on stderr for IPC clients (e.g. the
+    // seamless bridge) that don't connect to DimensionsListener directly. No-op
+    // when IPC is disabled. Called with m_led_mutex already held.
+    void PushLedStateIpc();
 
     std::mutex m_led_mutex;
     std::array<led_state, 3> m_led_state{};

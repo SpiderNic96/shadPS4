@@ -4,10 +4,13 @@
 #include "dimensions.h"
 
 #include "core/emulator_settings.h"
+#include "core/ipc/ipc.h"
 #include "core/libraries/kernel/threads.h"
 #include "core/tls.h"
 
+#include <iostream>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 
@@ -509,6 +512,14 @@ u8 LedRegionPad(u8 region) {
     static constexpr std::array<u8, 3> pads = {1, 2, 3};
     return pads[region];
 }
+// Independent of the NFC challenge/response RNG (m_random_a..d) so LED
+// fade-random colours never perturb that sequence.
+u8 NextLedRandomByte() {
+    static std::mutex rng_mutex;
+    static std::mt19937 rng{std::random_device{}()};
+    std::lock_guard lock(rng_mutex);
+    return static_cast<u8>(rng() & 0xFF);
+}
 } // namespace
 
 std::array<DimensionsToypad::led_state, 3> DimensionsToypad::GetLedStates() {
@@ -521,16 +532,16 @@ u8 DimensionsToypad::GetLedSerial() {
     return m_led_serial;
 }
 
-DimensionsToypad::led_state DimensionsToypad::GetLedState(u8 pad) {
-    std::lock_guard lock(m_led_mutex);
-    return m_led_state[LedPadIndex(pad)];
-}
-
 void DimensionsToypad::SetLedState(u8 pad, u8 mode, u8 r, u8 g, u8 b, u8 on_ms, u8 off_ms,
                                    u8 count, u8 speed_ms) {
     std::lock_guard lock(m_led_mutex);
+    const u8 serial_before = m_led_serial;
     auto apply = [&](u8 target_pad) {
             led_state& state = m_led_state[LedPadIndex(target_pad)];
+        // A fade's "from" colour is whatever the pad was already showing (or
+        // already fading towards) the moment this command lands, so a fade
+        // issued mid-fade still anchors to something on-screen.
+        const u8 from_r = state.r, from_g = state.g, from_b = state.b;
         if (state.mode == mode && state.r == r && state.g == g && state.b == b &&
             state.on_ms == on_ms && state.off_ms == off_ms && state.count == count &&
             state.speed_ms == speed_ms) {
@@ -541,6 +552,11 @@ void DimensionsToypad::SetLedState(u8 pad, u8 mode, u8 r, u8 g, u8 b, u8 on_ms, 
         state.r = r;
         state.g = g;
         state.b = b;
+        if (mode == 3) { // Fade: remember the pre-command colour to cross-fade from
+            state.from_r = from_r;
+            state.from_g = from_g;
+            state.from_b = from_b;
+        }
         state.on_ms = on_ms;
         state.off_ms = off_ms;
         state.count = count;
@@ -554,6 +570,51 @@ void DimensionsToypad::SetLedState(u8 pad, u8 mode, u8 r, u8 g, u8 b, u8 on_ms, 
     } else {
         apply(pad);
     }
+    if (m_led_serial != serial_before) {
+        PushLedStateIpc();
+    }
+}
+
+// Mirrors the current LED snapshot out over the stdin/stderr IPC channel (the
+// same one the seamless bridge already drives figure commands through), for a
+// companion app that isn't connected to DimensionsListener directly. Matches
+// DimensionsListener's wire layout field-for-field so both paths agree.
+// Called with m_led_mutex already held.
+void DimensionsToypad::PushLedStateIpc() {
+    if (!IPC::Instance().IsEnabled()) {
+        return;
+    }
+    std::string line = ";LED_STATE ";
+    line += std::to_string(m_led_serial);
+    for (const auto& state : m_led_state) {
+        line += ' ';
+        line += std::to_string(state.pad);
+        line += ' ';
+        line += std::to_string(state.mode);
+        line += ' ';
+        line += std::to_string(state.r);
+        line += ' ';
+        line += std::to_string(state.g);
+        line += ' ';
+        line += std::to_string(state.b);
+        line += ' ';
+        line += std::to_string(state.from_r);
+        line += ' ';
+        line += std::to_string(state.from_g);
+        line += ' ';
+        line += std::to_string(state.from_b);
+        line += ' ';
+        line += std::to_string(state.on_ms);
+        line += ' ';
+        line += std::to_string(state.off_ms);
+        line += ' ';
+        line += std::to_string(state.count);
+        line += ' ';
+        line += std::to_string(state.speed_ms);
+    }
+    line += '\n';
+    std::cerr << line;
+    std::cerr.flush();
 }
 
 // Parses the game's HID LED commands (0xC0..0xC8) and mirrors the per-region
@@ -580,10 +641,20 @@ void DimensionsToypad::HandleLedCommand(const u8* buf, u32 buf_size) {
         SetLedState(buf[4], 2, buf[8], buf[9], buf[10], buf[5], buf[6], count, 0);
         break;
     }
-    case 0xC4: // Fade Random: pad, tickTime, tickCount (colour left as-is)
+    case 0xC4: // Fade Random: pad, tickTime, tickCount
     {
-        const led_state existing = GetLedState(buf[4]);
-        SetLedState(buf[4], 3, existing.r, existing.g, existing.b, 0, 0, buf[6], buf[5]);
+        // The real portal's firmware picks its own random target per pad, so
+        // pad 0 (all pads) is expanded here rather than letting SetLedState
+        // broadcast one shared colour to all three.
+        if (buf[4] == 0) {
+            for (u8 target_pad = 1; target_pad <= 3; ++target_pad) {
+                SetLedState(target_pad, 3, NextLedRandomByte(), NextLedRandomByte(),
+                           NextLedRandomByte(), 0, 0, buf[6], buf[5]);
+            }
+        } else {
+            SetLedState(buf[4], 3, NextLedRandomByte(), NextLedRandomByte(), NextLedRandomByte(),
+                       0, 0, buf[6], buf[5]);
+        }
         break;
     }
     case 0xC6: // Fade All: per-region on/off, tickTime, tickCount, r, g, b

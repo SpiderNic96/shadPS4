@@ -39,8 +39,11 @@ class DimensionsToypad;
 // with a zero-length path the figure lives in memory for the session only.
 //
 // LOAD, REMOVE and MOVE are fire-and-forget. GET_LED is the only command that
-// replies: a 30-byte snapshot of what the game currently has the three LED
-// regions doing - see DimensionsToypad's LED mirror.
+// replies: a 40-byte snapshot of what the game currently has the three LED
+// regions doing - { 'L', serial, protocol version (2), region count, then 3
+// regions x 12 bytes (pad, mode, r, g, b, from_r, from_g, from_b, on_ms,
+// off_ms, count, speed_ms) } - see DimensionsToypad's LED mirror. Matches the
+// Cemu/RPCS3 listeners' protocol version 2.
 class DimensionsListener {
 public:
     explicit DimensionsListener(std::shared_ptr<DimensionsToypad> toypad);
