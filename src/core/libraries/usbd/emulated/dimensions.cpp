@@ -8,6 +8,7 @@
 #include "core/libraries/kernel/threads.h"
 #include "core/tls.h"
 
+#include <chrono>
 #include <iostream>
 #include <mutex>
 #include <random>
@@ -728,10 +729,11 @@ libusb_transfer_status DimensionsBackend::HandleAsyncTransfer(libusb_transfer* t
     switch (transfer->endpoint) {
     case 0x81: {
         // Read Endpoint, wait to respond with either an added/removed figure response, or a queued
-        // response from a previous write
+        // response from a previous write. The guest polls this endpoint from a dedicated thread,
+        // so block until something is available rather than spinning on the mutex.
         bool responded = false;
+        std::unique_lock lock(m_query_mutex);
         while (!responded) {
-            std::lock_guard lock(m_query_mutex);
             std::optional<std::array<u8, 32>> response =
                 m_dimensions_toypad->PopAddedRemovedResponse();
             if (response) {
@@ -743,6 +745,11 @@ libusb_transfer_status DimensionsBackend::HandleAsyncTransfer(libusb_transfer* t
                 transfer->length = 32;
                 m_queries.pop();
                 responded = true;
+            } else {
+                // A queued reply wakes us immediately; the timeout bounds how long a figure
+                // added/removed response can sit before it is noticed, since those are pushed
+                // under the toypad's mutex. It matches the endpoint's 1ms poll interval.
+                m_query_cv.wait_for(lock, std::chrono::milliseconds(1));
             }
         }
         break;
@@ -826,8 +833,11 @@ libusb_transfer_status DimensionsBackend::HandleAsyncTransfer(libusb_transfer* t
             break;
         }
         }
-        std::lock_guard lock(m_query_mutex);
-        m_queries.push(q_result);
+        {
+            std::lock_guard lock(m_query_mutex);
+            m_queries.push(q_result);
+        }
+        m_query_cv.notify_one();
         break;
     }
     default:

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -142,6 +143,10 @@ protected:
     }
 
     std::mutex m_query_mutex;
+    // Signalled when a reply is queued, so the read endpoint can wait instead of
+    // spinning. Figure add/remove responses live under the toypad's own mutex and
+    // are picked up by the wait's timeout rather than an explicit notify.
+    std::condition_variable m_query_cv;
     std::queue<std::array<u8, 32>> m_queries;
 
 private:
