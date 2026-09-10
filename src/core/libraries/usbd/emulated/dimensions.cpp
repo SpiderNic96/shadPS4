@@ -31,7 +31,15 @@ static constexpr std::array<u8, 25> PWD_CONSTANT = {
 DimensionsToypad::DimensionsToypad() {}
 
 void DimensionsToypad::LoadFigure(std::string file_name, u8 pad, u8 index) {
-    Common::FS::IOFile file(file_name, Common::FS::FileAccessMode::ReadWrite);
+    // Share read+write, not the IOFile default (ShareReadOnly, which maps to
+    // _SH_DENYWR). The companion app seeds/reads the same .bin while the
+    // emulator already holds it, and loading the same figure onto a second pad
+    // opens the same file again. With the default that second open - or the
+    // app's own write - fails with "permission denied" and the ASSERT below
+    // fires, so allow concurrent access instead.
+    Common::FS::IOFile file(file_name, Common::FS::FileAccessMode::ReadWrite,
+                            Common::FS::FileType::BinaryFile,
+                            Common::FS::FileShareFlag::ShareReadWrite);
     std::array<u8, 0x2D * 0x04> data;
     ASSERT(file.Read(data) == data.size());
     LoadDimensionsFigure(data, std::move(file), pad, index);
@@ -746,7 +754,14 @@ void DimensionsToypad::HandleLedCommand(const u8* buf, u32 buf_size) {
 
 DimensionsBackend::DimensionsBackend() {
     m_listener = std::make_unique<DimensionsListener>(m_dimensions_toypad);
-    m_listener->Start(static_cast<u16>(EmulatorSettings.GetDimensionsListenerPort()));
+    // Nothing exposes this setting in any UI, so a stored 0 can only be a leftover
+    // from before this port had a real default (e.g. a per-game config saved back
+    // when it was 0) rather than a deliberate choice to disable the listener.
+    u16 port = static_cast<u16>(EmulatorSettings.GetDimensionsListenerPort());
+    if (port == 0) {
+        port = 9191;
+    }
+    m_listener->Start(port);
 }
 
 DimensionsBackend::~DimensionsBackend() = default;

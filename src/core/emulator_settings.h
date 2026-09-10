@@ -324,8 +324,9 @@ struct InputSettings {
     Setting<int> usb_device_backend{UsbBackendType::Real}; // specific
     // TCP port for the emulated Dimensions Toypad's loopback listener, which lets an
     // external companion app place figures instead of the Dimensions Manager dialog.
-    // 0 disables it, which is the default - nothing binds unless it is asked for.
-    Setting<int> dimensions_listener_port{0}; // specific
+    // Defaults on so a companion app can connect without the user editing config.toml
+    // first; set to 0 in config.toml to disable it.
+    Setting<int> dimensions_listener_port{9191}; // specific
     Setting<bool> use_special_pad{false};
     Setting<int> special_pad_class{1};
     Setting<bool> motion_controls_enabled{true}; // specific
