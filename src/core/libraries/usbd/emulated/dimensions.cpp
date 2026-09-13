@@ -147,6 +147,11 @@ void DimensionsToypad::MoveFigure(u8 new_pad, u8 new_index, u8 old_pad, u8 old_i
         return;
     }
 
+    // A MOVE from an empty slot is a no-op: bail before touching the destination
+    // so it can't be cleared and then filled with a blank placeholder figure.
+    if (GetFigureByIndex(old_index).index == 255)
+        return;
+
     // When moving figures between spaces on the toypad, remove any figure from the space they are
     // moving to, then remove them from their current space, then load them to the space they are
     // moving to

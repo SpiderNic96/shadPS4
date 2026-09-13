@@ -61,6 +61,14 @@ constexpr size_t kLedResponseSize = 4 + 3 * 12;
 // does nothing. Letting the removal be picked up first keeps them distinct.
 constexpr auto kRemoveThenLoadDelay = std::chrono::milliseconds(100);
 
+// Moving a figure is a lift-then-place, not a teleport: the game has to see the
+// figure leave the old slot as its own event, then arrive on the new one later,
+// or keystone puzzles register the change only after a second move. This mirrors
+// the Cemu and RPCS3 listeners, which both hold the pickup for 500ms before the
+// MoveFigure call. Without it MoveFigure emits remove+add back to back and the
+// game collapses them into one no-op.
+constexpr auto kMovePickupDelay = std::chrono::milliseconds(500);
+
 bool RecvAll(socket_t s, u8* data, size_t len) {
     while (len != 0) {
         const auto got = ::recv(s, reinterpret_cast<char*>(data), static_cast<int>(len), 0);
@@ -258,6 +266,11 @@ void DimensionsListener::HandleClient(u64 client_handle) {
                           source_pad, source_index);
                 return;
             }
+            // Announce the pickup first, then let the game see it before placing
+            // on the destination (see kMovePickupDelay). MoveFigure on its own
+            // does remove+add in one burst, which the game ignores.
+            m_toypad->TempRemoveFigure(source_index);
+            std::this_thread::sleep_for(kMovePickupDelay);
             m_toypad->MoveFigure(pad, index, source_pad, source_index);
             LOG_INFO(Lib_Usbd, "Dimensions listener: MOVE {}/{} -> {}/{}", source_pad, source_index,
                      pad, index);
